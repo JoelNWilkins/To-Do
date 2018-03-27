@@ -3,7 +3,6 @@ from tkinter import ttk
 from tkinter.filedialog import askopenfilename, asksaveasfilename
 import pickle
 import os
-from draggableWidget import *
 
 class ToDo(tk.Tk):
     def __init__(self, *args, **kwargs):
@@ -16,11 +15,22 @@ class ToDo(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self.closeWindow)
 
         self.filename = None
+
+        self.showProgress = tk.BooleanVar()
+        self.showProgress.set(True)
         
         self.menuBar = MenuBar(self)
 
         self.taskFrame = TaskFrame(self)
-        self.taskFrame.pack(fill=tk.BOTH, expand=True)
+        self.taskFrame.grid(row=0, column=0, sticky="nsew")
+
+        self.rowconfigure(0, weight=1)
+        self.columnconfigure(0, weight=1)
+
+        self.statusBar = StatusBar(self, relief=tk.SUNKEN, borderwidth=1,
+                                   padx=2, pady=2)
+        self.statusBar.grid(row=1, column=0, sticky="sew")
+
         self.taskFrame.lift()
 
         self.updateTasks()
@@ -72,12 +82,17 @@ class ToDo(tk.Tk):
             self.taskFrame.tasks = tasks
             self.title(title)
 
-        self.geometry(geometry)
+        #self.geometry(geometry)
         self.saveData()
 
     def save(self, *args, **kwargs):
         try:
             filename = self.taskFrame.save(*args, **kwargs)
+
+            if "\\" in filename:
+                filename = filename.split("\\")[-1].replace(".todo", "")
+            else:
+                filename = filename.split("/")[-1].replace(".todo", "")
 
             self.title("{} - To Do".format(filename))
         except PermissionError:
@@ -88,6 +103,14 @@ class ToDo(tk.Tk):
     def updateTasks(self, *args, **kwargs):
         self.taskFrame.updateTasks()
 
+    def updateProgress(self, *args, **kwargs):
+        self.statusBar.updateProgress()
+
+        if self.showProgress.get():
+            self.statusBar.grid(row=1, column=0, sticky="sew")
+        else:
+            self.statusBar.grid_forget()
+
     def addTask(self, *args, **kwargs):
         geometry = self.winfo_geometry()
         self.taskFrame.addTask(*args, **kwargs)
@@ -95,11 +118,11 @@ class ToDo(tk.Tk):
 
     def addGroup(self, *args, **kwargs):
         geometry = self.winfo_geometry()
-        group = self.taskFrame.addGroup(*args, **kwargs)
+        self.taskFrame.addGroup(*args, **kwargs)
         self.geometry(geometry)
-        self.taskFrame.frameConfig()
 
-        return group
+    def getTasks(self, *args, **kwargs):
+        return self.taskFrame.getTasks()
 
 class TaskFrame(tk.Frame):
     def __init__(self, parent, *args, **kwargs):
@@ -118,8 +141,6 @@ class TaskFrame(tk.Frame):
         tk.Frame.__init__(self, *args, master=self.canvas, **kwargs)
         self.id = self.canvas.create_window(0, 0, window=self, anchor=tk.NW,
                                             height=self.canvas.winfo_height())
-
-        self.columnconfigure(0, weight=1)
 
         self.parent.rowconfigure(0, weight=1)
         self.parent.columnconfigure(0, weight=1)
@@ -142,12 +163,20 @@ class TaskFrame(tk.Frame):
 
             for task in self.tasks:
                 task.config(wraplength=wrap)
-
+                
     def _configure_canvas(self, *args, **kwargs):
-        if (self.winfo_reqwidth() != self.canvas.winfo_width() or
-            self.winfo_reqheight() != self.canvas.winfo_height()):
+        if (self.winfo_reqwidth() != self.canvas.winfo_width()
+            or self.winfo_reqheight() != self.canvas.winfo_height()):
+            height = 0
+            for task in self.tasks:
+                height += task.parent.winfo_height()
+
+            if self.canvas.winfo_height() > height:
+                height = self.canvas.winfo_height()
+            
+            self.canvas.configure(height=height)
             self.canvas.itemconfigure(self.id, width=self.canvas.winfo_width(),
-                                      height=self.canvas.winfo_height())
+                                      height=height)
 
     def _mousewheel(self, event):
         self.canvas.yview_scroll(int(-(event.delta/120)), "units")
@@ -155,13 +184,28 @@ class TaskFrame(tk.Frame):
             self.canvas.yview_moveto(0)
         
     def frameConfig(self, *args, **kwargs):
-        if "width" in kwargs.keys():
-            width = kwargs.pop("width")
-        else:
-            width = self.winfo_reqwidth()
-            
-        self.canvas.config(width=width)
-        self.canvas.itemconfigure(self.id, width=self.canvas.winfo_width())
+        height = 0
+        for task in self.tasks:
+            height += task.parent.winfo_height()
+
+        if self.canvas.winfo_height() > height:
+            height = self.canvas.winfo_height()
+        
+        self.canvas.configure(height=height)
+        self.canvas.itemconfigure(self.id, width=self.canvas.winfo_width(),
+                                  height=height)
+        
+        size = (self.winfo_reqwidth(), height)
+        self.canvas.config(scrollregion="0 0 %s %s" % size)
+        
+        self.canvas.config(width=self.winfo_reqwidth())
+
+        wrap = self.winfo_width() - 30
+        if wrap < 0:
+            wrap = 0
+
+        for task in self.tasks:
+            task.config(wraplength=wrap)
 
     def grid(self, *args, **kwargs):
         self.parent.grid(*args, **kwargs)
@@ -211,21 +255,37 @@ class TaskFrame(tk.Frame):
 
             count += 1
 
+        self.parent.master.updateProgress()
+
     def addTask(self, *args, **kwargs):
         if "update" in kwargs.keys():
             update = kwargs.pop("update")
         else:
             update = True
             
-        self.tasks.append(TaskCheckbutton(self, *args, **kwargs))
+        self.tasks.append(TaskCheckbutton(self, *args,
+            command=self.parent.master.updateProgress, **kwargs))
 
         if update:
             self.updateTasks()
 
+    def addGroup(self, *args, **kwargs):
+        if "update" in kwargs.keys():
+            update = kwargs.pop("update")
+        else:
+            update = True
+            
+        self.tasks.append(TaskGroup(self, *args,
+            command=self.parent.master.updateProgress, **kwargs))
+
+        if update:
+            self.updateTasks()
+            self.frameConfig()
+
     def getTasks(self, *args, **kwargs):
         output = []
         for task in self.tasks:
-            output.append({"text": task["text"], "value": task.get()})
+            output.append({"text": task.getText(), "value": task.get()})
 
         return output
 
@@ -250,8 +310,7 @@ class DraggableFrame(tk.Frame):
         self.pressed = False
         self.config(borderwidth=0, relief=tk.FLAT)
 
-        y = (event.widget.winfo_pointery()
-             - self.master.winfo_rooty())
+        y = (event.widget.winfo_pointery() - self.master.winfo_rooty())
 
         parents = []
         for task in self.master.tasks:
@@ -288,7 +347,7 @@ class DraggableFrame(tk.Frame):
             elif (y > self.master.winfo_height() - self.winfo_height()):
                 y = (self.master.winfo_height() - self.winfo_height())
 
-            self.place(x=0, y=y)        
+            self.place(x=0, y=y)
 
 class TaskCheckbutton(tk.Checkbutton):
     def __init__(self, parent, *args, **kwargs):
@@ -307,7 +366,7 @@ class TaskCheckbutton(tk.Checkbutton):
         else:
             self.space = 0
 
-        self.parent = DraggableFrame(parent)#tk.Frame(master=parent)
+        self.parent = DraggableFrame(parent)
 
         self.spaceLabel = tk.Label(self.parent, text=" "*self.space)
         self.spaceLabel.grid(row=0, column=0, sticky="ew")
@@ -320,62 +379,6 @@ class TaskCheckbutton(tk.Checkbutton):
         self.bind("<ButtonRelease-3>", self.parent.release)
         self.bind("<Motion>", self.parent.move)
 
-        #self.pressed = False
-        
-        """self.bind("<Button-3>", self.press)
-        self.bind("<ButtonRelease-3>", self.release)
-        self.bind("<Motion>", self.move)
-
-    def press(self, event):
-        self.pressed = True
-        self.x = event.x
-        self.y = event.y
-        self.parent.lift()
-        self.parent.config(borderwidth=1, relief=tk.RIDGE)
-
-    def release(self, event):
-        self.pressed = False
-        self.parent.config(borderwidth=0, relief=tk.FLAT)
-
-        y = (event.widget.winfo_pointery()
-             - self.parent.master.winfo_rooty())
-
-        if self.parent.winfo_y() < 5:
-            self.parent.master.tasks.pop(self.parent.master.tasks.index(self))
-            self.parent.master.tasks.insert(0, self)
-        else:
-            height = 0
-            for i in range(len(self.parent.master.tasks)):
-                task = self.parent.master.tasks[i]
-                height += task.parent.winfo_height()
-
-                if (task != self and y < height - task.parent.winfo_height() / 2):
-                    self.parent.master.tasks.pop(
-                        self.parent.master.tasks.index(self))
-                    self.parent.master.tasks.insert(i, self)
-                    
-                    break
-                elif i == len(self.parent.master.tasks) - 1:
-                    self.parent.master.tasks.pop(
-                            self.parent.master.tasks.index(self))
-                    self.parent.master.tasks.append(self)
-                        
-        self.parent.master.updateTasks()
-
-    def move(self, event):
-        if self.pressed:
-            y = (event.widget.winfo_pointery()
-                 - self.parent.master.winfo_rooty() - self.y)
-
-            if y < 0:
-                y = 0
-            elif (y > self.parent.master.winfo_height()
-                  - self.parent.winfo_height()):
-                y = (self.parent.master.winfo_height()
-                     - self.parent.winfo_height())
-
-            self.parent.place(x=0, y=y)"""
-        
     def get(self, *args, **kwargs):
         return self.var.get()
 
@@ -384,6 +387,113 @@ class TaskCheckbutton(tk.Checkbutton):
 
     def pack(self, *args, **kwargs):
         self.parent.pack(*args, **kwargs)
+
+    def getText(self, *args, **kwargs):
+        return self["text"]
+
+class TaskGroup(tk.Checkbutton):
+    def __init__(self, parent, *args, **kwargs):
+        self.var = tk.BooleanVar()
+        
+        if "command" in kwargs.keys():
+            self.command = kwargs.pop("command")
+
+        if "filename" in kwargs.keys():
+            filename = kwargs.pop("filename")
+        else:
+            filename = None
+
+        if "space" in kwargs.keys():
+            self.space = kwargs.pop("space")
+        else:
+            self.space = 10
+
+        if "notes" in kwargs.keys():
+            self.notes = kwargs.pop("notes")
+        else:
+            self.notes = ""
+
+        if "value" in kwargs.keys():
+            self.var.set(kwargs.pop("value"))
+
+        self.parent = DraggableFrame(parent)
+
+        self.spaceLabel = tk.Label(self.parent)
+        self.spaceLabel.grid(row=0, column=0, sticky="ew")
+             
+        tk.Checkbutton.__init__(self, *args, master=self.parent,
+                                variable=self.var, justify=tk.LEFT, **kwargs)
+        self.grid_configure(row=0, column=1, sticky="w")
+
+        self.bind("<Button-3>", self.parent.press)
+        self.bind("<ButtonRelease-3>", self.parent.release)
+        self.bind("<Motion>", self.parent.move)
+
+        self.tasks = []
+        self.parent.tasks = self.parent.master.tasks
+
+        if filename != None:
+            with open(filename, "rb") as f:
+                data = pickle.load(f)
+                
+            for task in data:
+                self.addTask(**task)
+
+    def get(self, *args, **kwargs):
+        return self.var.get()
+
+    def config(self, *args, **kwargs):
+        if "wraplength" in kwargs.keys():
+            wrap = kwargs.pop("wraplength")
+
+            self.configure(wraplength=wrap)
+
+            wrap -= self.space + 27
+            
+            for task in self.tasks:
+                task.config(wraplength=wrap)
+
+        self.parent.config(*args, **kwargs)
+
+    def grid(self, *args, **kwargs):
+        self.parent.grid(*args, **kwargs)
+        self.updateTasks()
+
+    def grid_forget(self, *args, **kwargs):
+        self.parent.grid_forget(*args, **kwargs)
+
+    def pack(self, *args, **kwargs):
+        self.parent.pack(*args, **kwargs)
+        self.updateTasks()
+
+    def pack_forget(self, *args, **kwargs):
+        self.parent.pack_forget(*args, **kwargs)
+
+    def getText(self, *args, **kwargs):
+        return self["text"]
+
+    def updateTasks(self, *args, **kwargs):
+        self.grid_configure(row=0, column=1, sticky="w")
+
+        count = 1   
+        for task in self.tasks:
+            task.grid(row=count, column=1, sticky="w")
+
+            count += 1
+
+        self.command()
+
+    def addTask(self, *args, **kwargs):
+        if "update" in kwargs.keys():
+            update = kwargs.pop("update")
+        else:
+            update = True
+            
+        self.tasks.append(TaskCheckbutton(self.parent, *args, space=self.space,
+                                          command=self.command, **kwargs))
+
+        if update:
+            self.updateTasks()
 
 class MenuBar(tk.Menu):
     def __init__(self, parent, *args, **kwargs):
@@ -403,7 +513,14 @@ class MenuBar(tk.Menu):
 
         self.editMenu = tk.Menu(self, tearoff=False)
         self.editMenu.add_command(label="Add Task", command=self.addTask)
+        self.editMenu.add_command(label="Add Group", command=self.addGroup)
         self.add_cascade(label="Edit", menu=self.editMenu)
+
+        self.optionsMenu = tk.Menu(self, tearoff=False)
+        self.optionsMenu.add_checkbutton(label="Progress",
+                                         variable=self.master.showProgress,
+                                         command=self.updateProgress)
+        self.add_cascade(label="Options", menu=self.optionsMenu)
 
         self.master.bind("<Control-n>", self.new)
         self.master.bind("<Control-o>", self.open)
@@ -462,6 +579,53 @@ class MenuBar(tk.Menu):
         cancelButton.grid(row=0, column=1, padx=2, pady=2)
 
         entry.focus_force()
+
+    def addGroup(self, *args, **kwargs):
+        filename = askopenfilename(parent=self.master,
+                                   filetypes=[("To Do Files", "*.todo")],
+                                   defaultextension=".todo")
+
+        self.master.addGroup(filename=filename, text="To Do Program")
+
+    def updateProgress(self, *args, **kwargs):
+        self.master.updateProgress()
+
+class StatusBar(tk.Frame):
+    def __init__(self, parent, *args, **kwargs):
+        tk.Frame.__init__(self, *args, master=parent, **kwargs)
+
+        self.progressVar = tk.IntVar()
+
+        self.progress = ttk.Progressbar(self, variable=self.progressVar)
+
+        self.bind("<Configure>", self.resize)
+
+        self.updateProgress()
+
+    def resize(self, *args, **kwargs):
+        self.progress.config(length=self.winfo_width() - 2 * self["padx"] - 1)
+
+    def updateProgress(self, *args, **kwargs):
+        if self.master.showProgress.get():
+            tasks = self.master.getTasks()
+
+            done = 0
+            for task in tasks:
+                if task["value"]:
+                    done += 1
+
+            try:
+                percentage = int(100 * done / len(tasks))
+            except ZeroDivisionError:
+                percentage = 0
+
+            self.progressVar.set(done)
+            self.progress.config(maximum=len(tasks))
+            self.progress.grid(row=0, column=0)
+
+            self.resize()
+        else:
+            self.progress.grid_forget()
 
 if __name__ == "__main__":
     todo = ToDo()
